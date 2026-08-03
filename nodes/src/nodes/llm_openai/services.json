@@ -354,8 +354,10 @@
 				"title": "OpenAI: GPT-5.1 Chat",
 				"model": "gpt-5.1-chat",
 				"modelSource": "openrouter",
-				"modelTotalTokens": 128000, // openrouter
-				"modelOutputTokens": 16384, // openrouter
+				"modelTotalTokens": 128000, // manual
+				"modelOutputTokens": 16384, // manual
+				"deprecated": true,
+				"migration": "Model no longer listed in OpenRouter. Please select a current model.",
 				"apikey": ""
 			},
 			"gpt-5-3-chat": {
@@ -438,8 +440,10 @@
 				"title": "OpenAI: GPT-5 Chat",
 				"model": "gpt-5-chat",
 				"modelSource": "openrouter",
-				"modelTotalTokens": 128000, // openrouter
-				"modelOutputTokens": 16384, // openrouter
+				"modelTotalTokens": 128000, // manual
+				"modelOutputTokens": 16384, // manual
+				"deprecated": true,
+				"migration": "Model no longer listed in OpenRouter. Please select a current model.",
 				"apikey": ""
 			},
 			"gpt-chat-latest": {

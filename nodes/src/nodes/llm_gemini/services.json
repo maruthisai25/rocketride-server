@@ -264,7 +264,7 @@
 				"model": "models/gemini-3.1-flash-lite-image",
 				"modelSource": "openrouter",
 				"modelTotalTokens": 65536, // openrouter
-				"modelOutputTokens": 66000, // openrouter
+				"modelOutputTokens": 65536, // openrouter
 				"apikey": ""
 			},
 			"models-gemini-3-5-flash": {
