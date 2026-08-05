@@ -22,10 +22,10 @@
  * SOFTWARE.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Question, QuestionType, PIPELINE_RESULT } from 'rocketride';
 import { Message } from '../types/chat.types';
-import { extractTextFromResult } from '../utils/pipelineUtils';
+import { extractTextFromResult, extractMediaFromResult } from '../utils/pipelineUtils';
 
 /**
  * Custom hook for managing chat message state and API communication
@@ -41,6 +41,9 @@ import { extractTextFromResult } from '../utils/pipelineUtils';
  */
 export const useChatMessages = () => {
 	const [messages, setMessages] = useState<Message[]>([]);
+
+	/** Artifact paths already rendered from an SSE announcement. */
+	const announcedPaths = useRef(new Set<string>());
 	const [isTyping, setIsTyping] = useState(false);
 
 	/**
@@ -63,7 +66,7 @@ export const useChatMessages = () => {
 		userMessage: string,
 		client: any,
 		authToken: string
-	): Promise<ReturnType<typeof extractTextFromResult>> => {
+	): Promise<{ answers: ReturnType<typeof extractTextFromResult>; media: ReturnType<typeof extractMediaFromResult> }> => {
 		try {
 			if (!client || !authToken) {
 				throw new Error('Not connected to RocketRide. Please refresh the page.');
@@ -91,6 +94,21 @@ export const useChatMessages = () => {
 				token: authToken,
 				question: question,
 				onSSE: async (type: string, data: Record<string, unknown>) => {
+					// The response node announces the artifact before its first byte exists.
+					if (type === 'artifact_path' && typeof data.path === 'string') {
+						announcedPaths.current.add(data.path);
+						setMessages(prev => [...prev, {
+							id: Date.now(),
+							text: '',
+							sender: 'bot',
+							timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+							filePath: data.path as string,
+							mediaMime: typeof data.mime_type === 'string' ? data.mime_type : undefined,
+							mediaName: typeof data.name === 'string' ? data.name : undefined
+						}]);
+						return;
+					}
+
 					const text = data.message as string | undefined;
 					if (text) {
 						setMessages(prev => [...prev, {
@@ -104,10 +122,17 @@ export const useChatMessages = () => {
 				}
 			});
 
+			// The result names every artifact. SSE may have announced some of them
+			// already; the caller drops those and renders the rest.
+			const media = extractMediaFromResult(result);
+
 			// Extract text responses from result
 			const textResponses = extractTextFromResult(result);
+			const answers = textResponses.length > 0 || media.length > 0
+				? textResponses
+				: [{ text: 'No valid response received', key: '' }];
 
-			return textResponses.length > 0 ? textResponses : [{ text: 'No valid response received', key: '' }];
+			return { answers, media };
 
 		} catch (error) {
 			console.error('Error sending message via SDK:', error);
@@ -143,18 +168,32 @@ export const useChatMessages = () => {
 
 		try {
 			// Send to API and get response using authToken
-			const answers = await sendMessageToAPI(text, client, authToken);
+			const { answers, media } = await sendMessageToAPI(text, client, authToken);
 
-			// Add bot response(s) to chat
+			const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 			const botResponses: Message[] = answers.map((answer, index) => ({
 				id: Date.now() + index + 1,
 				text: answer.text,
 				sender: 'bot' as const,
-				timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+				timestamp,
 				...(answer.key ? { resultKey: answer.key } : {})
 			}));
 
-			setMessages(prev => [...prev, ...botResponses]);
+			// The announcement bus is lossy; the result is not. Render whatever SSE
+			// never delivered — a dropped event must not cost the user their media.
+			const mediaResponses: Message[] = media
+				.filter(item => item.url || (item.path && !announcedPaths.current.has(item.path)))
+				.map((item, index) => ({
+					id: Date.now() + answers.length + index + 1,
+					text: '',
+					sender: 'bot' as const,
+					timestamp,
+					...(item.url ? { mediaUrl: item.url } : { filePath: item.path as string }),
+					mediaMime: item.mime,
+					mediaName: item.name
+				}));
+
+			setMessages(prev => [...prev, ...botResponses, ...mediaResponses]);
 		} catch (error) {
 			// Show error message in chat
 			const errorMessage: Message = {
