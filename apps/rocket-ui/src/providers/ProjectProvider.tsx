@@ -37,7 +37,7 @@
 
 import React, { useEffect, useCallback, useMemo, useRef, useState, CSSProperties } from 'react';
 import { commonStyles } from 'shell';
-import { getClient, useShellConnection, useWorkspace, useSubscriptions, ConnectionManager, ConfirmDialog } from 'shell';
+import { getClient, useShellConnection, useWorkspace, useSubscriptions, ConnectionManager, ConfirmDialog, SaveFileDialog } from 'shell';
 import { getDocs } from '../docs';
 import type { PipelineConfig } from 'shell';
 // Project module is imported via subpath (not the 'shared' barrel) so the
@@ -48,12 +48,11 @@ import { foldProjectDeployRuns } from 'shared/modules/sidebar/taskFold';
 import type { DeploySnapshot, TeamDeployment } from 'shared/components/deploy-panel';
 import type { DeployArtifact } from 'shell';
 import { useDeployments } from '../hooks/useDeployments';
-import { usePipelineTree } from '../hooks/usePipelineTree';
 import { PrefsProvider } from 'shell';
 import type { TaskEventMessage, TaskEventSession, TaskStatus, TaskTimeline, TraceLevel, ViewState } from 'shared/modules/project';
 import { saveProject, deleteProject, displayName as projectDisplayName } from '../utils/projectStore';
+import { createProjectVfs } from '../utils/projectVfs';
 import { downloadJson } from '../utils/downloadFile';
-import SaveDialog from '../components/layout/SaveDialog';
 import DeploymentProvider from './DeploymentProvider';
 
 // =============================================================================
@@ -195,10 +194,9 @@ const ProjectProvider: React.FC<ProjectPageProps> = ({ uri, pipeline, isDirty, i
 	const projectId = pipeline?.project_id ?? '';
 	const filename = uri;
 
-	// Existing pipeline paths (with extension) for the SaveDialog's overwrite
-	// guard — the hook refreshes itself on connect and on project:saved.
-	const { flat: pipelineFlat } = usePipelineTree(client, isConnected);
-	const existingPaths = useMemo(() => pipelineFlat.map((entry) => entry.path), [pipelineFlat]);
+	// Project-store VFS for the stock SaveFileDialog — the dialog loads its own
+	// folder tree and drives its own overwrite confirm through this adapter.
+	const projectVfs = useMemo(() => createProjectVfs(client), [client]);
 
 	// --- Services from the shell's cached catalog -----------------------------
 
@@ -898,7 +896,7 @@ const ProjectProvider: React.FC<ProjectPageProps> = ({ uri, pipeline, isDirty, i
 				    workspace prefs. */}
 				{openDeployment && <DeploymentProvider key={`${openDeployment.teamId}:${openDeployment.sourceId ?? ''}:${projectId}`} teamId={openDeployment.teamId} {...(openDeployment.sourceId ? { sourceId: openDeployment.sourceId } : {})} projectId={projectId} onClose={() => setOpenDeployment(null)} onOpenSource={(sourceId: string) => setOpenDeployment({ teamId: openDeployment.teamId, sourceId })} />}
 			</PrefsProvider>
-			{saveDialogOpen && <SaveDialog client={client} isConnected={isConnected} existingPaths={existingPaths} onConfirm={handleSaveDialogConfirm} onCancel={() => setSaveDialogOpen(false)} />}
+			{saveDialogOpen && <SaveFileDialog title="Save Pipeline As" vfs={projectVfs} fileTypes={[{ label: 'RocketRide Pipeline', extension: '.pipe' }]} onConfirm={handleSaveDialogConfirm} onCancel={() => setSaveDialogOpen(false)} />}
 			{pendingRun && <ConfirmDialog title="Unsaved Changes" message="The pipeline has unsaved changes. Save before running?" confirmLabel="Save & Run" cancelLabel="Cancel" onConfirm={handleSaveAndRun} onCancel={() => setPendingRun(null)} />}
 			{pipelineError && <ConfirmDialog title="Pipeline Error" message={pipelineError} confirmLabel="OK" onConfirm={() => setPipelineError(null)} onCancel={() => setPipelineError(null)} />}
 		</div>

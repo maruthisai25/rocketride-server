@@ -14,10 +14,10 @@
  *   ProjectHost (Node.js) ↔ postMessage ↔ ProjectWebview (browser) → ProjectView (pure UI)
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 
 import { applyTheme } from 'shell';
-import type { IProject, ThemeTokens } from 'shell';
+import type { IProject, ThemeTokens, IVirtualFileSystem } from 'shell';
 // Project module is imported via subpath (not the 'shared' barrel): the
 // barrel is the shell's MF share and must stay canvas-free; this webview
 // bundles the project module directly.
@@ -26,7 +26,7 @@ import { registerServiceIcons } from 'shared/components/canvas/util/Icon';
 import { foldProjectDeployRuns } from 'shared/modules/sidebar/taskFold';
 import type { TaskLifecycleEvent } from 'shared/modules/sidebar/taskFold';
 import type { TaskEventMessage, TaskEventSession, TaskStatus, TaskTimeline, ViewState } from 'shared/modules/project';
-import { CheckoutModal } from 'shell';
+import { CheckoutModal, SaveFileDialog } from 'shell';
 import type { CheckoutPlan, PlanAction } from 'shell';
 import { DeploymentRecordPanel, TeamDeploymentRecordPanel } from 'shared/components/deploy-panel';
 import type { DeploySnapshot } from 'shared/components/deploy-panel';
@@ -81,6 +81,10 @@ const ProjectWebview: React.FC = () => {
 	const [isReadonly, setIsReadonly] = useState(false);
 	const [showCheckout, setShowCheckout] = useState(false);
 	const [envKeys, setEnvKeys] = useState<string[]>([]);
+	// In-app Save dialog state for NEW (untitled) documents: open flag + the
+	// host-resolved default pipeline directory (preselected in the dialog).
+	const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+	const [defaultDir, setDefaultDir] = useState('');
 
 	// Deploy lifecycle: LIVE rows pushed by deploy:data (badges/where-live);
 	// the panel's registry snapshot resolves through pendingLifecycleFetches.
@@ -147,6 +151,11 @@ const ProjectWebview: React.FC = () => {
 	const pendingNodeSchemas = useRef<Map<number, { resolve: (v: Record<string, any> | undefined) => void; reject: (e: Error) => void }>>(new Map());
 	const nodeSchemaCounter = useRef(0);
 
+	// Pending workspace-VFS round-trips (request-ID → Promise resolver) for
+	// the in-app Save dialog's list/mkdir calls.
+	const pendingVfsRequests = useRef<Map<number, { resolve: (entries?: { name: string; type: 'file' | 'dir' }[]) => void; reject: (e: Error) => void }>>(new Map());
+	const vfsRequestCounter = useRef(0);
+
 	// --- Messaging ------------------------------------------------------------
 
 	const sendMessageRef = useRef<(msg: ProjectWebviewToHost) => void>(() => {});
@@ -180,6 +189,17 @@ const ProjectWebview: React.FC = () => {
 				setOauthReturnUrl(msg.oauthReturnUrl);
 				setPendingOAuthTokens(undefined);
 				setEnvKeys(msg.envKeys ?? []);
+				setDefaultDir(msg.defaultDir ?? '');
+				break;
+			}
+			case 'vfs:response': {
+				// Settle the matching workspace-VFS round-trip (Save dialog list/mkdir).
+				const pending = pendingVfsRequests.current.get(msg.requestId);
+				if (pending) {
+					pendingVfsRequests.current.delete(msg.requestId);
+					if (msg.error) pending.reject(new Error(msg.error));
+					else pending.resolve(msg.entries);
+				}
 				break;
 			}
 			case 'project:oauthTokens':
@@ -551,8 +571,41 @@ const ProjectWebview: React.FC = () => {
 	}, []);
 
 	const handleSave = useCallback(() => {
+		// NEW (untitled) documents route through the in-app SaveFileDialog —
+		// document.save() on an untitled doc is exactly the native OS dialog
+		// this flow replaces. Saved documents save in place as before.
+		if (isNew) {
+			setSaveDialogOpen(true);
+			return;
+		}
 		sendMessage({ type: 'project:requestSave' });
-	}, [sendMessage]);
+	}, [sendMessage, isNew]);
+
+	/** One requestId-correlated workspace-VFS round-trip (list/mkdir). */
+	const vfsRequest = useCallback((op: 'list' | 'mkdir', vfsPath: string): Promise<{ name: string; type: 'file' | 'dir' }[] | undefined> => {
+		return new Promise((resolve, reject) => {
+			const requestId = ++vfsRequestCounter.current;
+			pendingVfsRequests.current.set(requestId, { resolve, reject });
+			sendMessageRef.current({ type: 'vfs:request', requestId, op, path: vfsPath });
+		});
+	}, []);
+
+	// Workspace VFS for the in-app Save dialog: list/mkdir bridge onto the
+	// extension host (rooted at the workspace folder). The dialog never reads
+	// or writes file content itself — the save goes through project:saveAs.
+	const workspaceVfs = useMemo<IVirtualFileSystem>(
+		() => ({
+			list: async (dir: string) => (await vfsRequest('list', dir)) ?? [],
+			read: async () => undefined,
+			write: async () => undefined,
+			rename: async () => undefined,
+			delete: async () => undefined,
+			mkdir: async (dirPath: string) => {
+				await vfsRequest('mkdir', dirPath);
+			},
+		}),
+		[vfsRequest]
+	);
 
 	// --- Checkout callbacks (bridge to host via postMessage) ------------------
 
@@ -956,6 +1009,21 @@ const ProjectWebview: React.FC = () => {
 								},
 							}
 						: {})}
+				/>
+			)}
+			{/* In-app Save dialog for NEW documents — workspace tree via the
+			    vfs:request bridge; the chosen path saves through project:saveAs. */}
+			{saveDialogOpen && (
+				<SaveFileDialog
+					title="Save Pipeline As"
+					vfs={workspaceVfs}
+					fileTypes={[{ label: 'RocketRide Pipeline', extension: '.pipe' }]}
+					defaultDir={defaultDir}
+					onConfirm={(savePath) => {
+						setSaveDialogOpen(false);
+						sendMessageRef.current({ type: 'project:saveAs', path: savePath });
+					}}
+					onCancel={() => setSaveDialogOpen(false)}
 				/>
 			)}
 			{showCheckout && stripeKey && <CheckoutModal appName="RocketRide" appDescription="Visual AI pipeline editor — run and deploy pipelines on RocketRide Cloud." stripePublishableKey={stripeKey} onFetchPlans={handleFetchPlans} onCreateCheckout={handleCreateCheckout} onConfirmPending={handleConfirmPending} onSuccess={handleCheckoutSuccess} onClose={() => setShowCheckout(false)} onActionClick={(_plan: CheckoutPlan, action: PlanAction) => sendMessageRef.current({ type: 'project:openLink', url: action.type === 'mailto' ? `mailto:${action.url}${action.subject ? `?subject=${encodeURIComponent(action.subject)}` : ''}` : action.url, browser: true })} />}

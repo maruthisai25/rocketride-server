@@ -27,6 +27,7 @@ import { PipelineFileParser } from '../shared/util/pipelineParser';
 import { isSubscribed } from '../shared/util/subscriptionGate';
 import { isDeployRunBody } from '../shared/util/runClassification';
 import { handleMissingEnvVars } from '../shared/util/envVarCheck';
+import { resolveDefaultPipelineDir } from '../shared/util/pipelinePaths';
 import { resolveDeployTeams, mapVersionCards, mapHistoryRows, mapTeamDeploymentRows, mapScheduleRows, teamNameOf, mapDeploymentInfo } from '../shared/util/deployMapping';
 import type { DeploymentWebviewToHost, DeploymentLoadPayload } from './types/deployTypes';
 import type { LogSessionWebviewToHost } from './types/logTypes';
@@ -537,6 +538,9 @@ export class ProjectProvider implements vscode.CustomTextEditorProvider {
 						// `<uriScheme>://rocketride.rocketride/auth/google` deep link.
 						oauthReturnUrl: `https://api.rocketride.ai/auth/vscode/google?scheme=${vscode.env.uriScheme}`,
 						envKeys,
+						// Preselected folder for the in-app Save dialog (may not
+						// exist yet — the dialog ghost-renders and creates it).
+						defaultDir: resolveDefaultPipelineDir(),
 					});
 					webview.postMessage({ type: 'project:dirtyState', isDirty: document.isDirty, isNew: document.isUntitled });
 
@@ -618,6 +622,62 @@ export class ProjectProvider implements vscode.CustomTextEditorProvider {
 
 				case 'project:requestSave': {
 					await document.save();
+					break;
+				}
+
+				case 'project:saveAs': {
+					// The in-app SaveFileDialog picked a workspace-relative path for a
+					// NEW (untitled) document — write it ourselves so the native OS
+					// save dialog never appears, then swap editors to the saved file.
+					const rel = typeof data.path === 'string' ? data.path : '';
+					const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+					if (!rel || !workspaceFolder) {
+						vscode.window.showErrorMessage('Cannot save pipeline: no workspace folder open');
+						break;
+					}
+					try {
+						const target = vscode.Uri.joinPath(workspaceFolder.uri, ...rel.split('/'));
+						// mkdirp: the dialog may target the not-yet-created default dir.
+						await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(target, '..'));
+						await vscode.workspace.fs.writeFile(target, Buffer.from(document.getText(), 'utf8'));
+						if (document.isUntitled) {
+							// Discard the untitled buffer WITHOUT the native dirty
+							// prompt: reveal makes it the active editor, revert drops
+							// its content (already on disk), close is then silent.
+							webviewPanel.reveal(undefined, false);
+							await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+						}
+						await vscode.commands.executeCommand('vscode.openWith', target, 'rocketride.PageProject');
+					} catch (error) {
+						vscode.window.showErrorMessage(`Failed to save pipeline: ${error instanceof Error ? error.message : String(error)}`);
+					}
+					break;
+				}
+
+				case 'vfs:request': {
+					// Workspace-VFS bridge for the in-app Save dialog: list/mkdir
+					// against the workspace folder. Dot-directories and node_modules
+					// are filtered from listings so the dialog's recursive tree walk
+					// never descends into dependency/VCS trees.
+					const requestId = data.requestId as number;
+					const rel = typeof data.path === 'string' ? data.path : '';
+					try {
+						const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+						if (!workspaceFolder) throw new Error('No workspace folder open');
+						const target = rel ? vscode.Uri.joinPath(workspaceFolder.uri, ...rel.split('/')) : workspaceFolder.uri;
+						if (data.op === 'mkdir') {
+							await vscode.workspace.fs.createDirectory(target);
+							webview.postMessage({ type: 'vfs:response', requestId });
+						} else {
+							const listing = await vscode.workspace.fs.readDirectory(target);
+							const entries = listing
+								.filter(([name, kind]) => !(kind === vscode.FileType.Directory && (name.startsWith('.') || name === 'node_modules')))
+								.map(([name, kind]) => ({ name, type: kind === vscode.FileType.Directory ? ('dir' as const) : ('file' as const) }));
+							webview.postMessage({ type: 'vfs:response', requestId, entries });
+						}
+					} catch (error) {
+						webview.postMessage({ type: 'vfs:response', requestId, error: error instanceof Error ? error.message : String(error) });
+					}
 					break;
 				}
 

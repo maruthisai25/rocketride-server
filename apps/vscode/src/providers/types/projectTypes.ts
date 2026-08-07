@@ -25,7 +25,7 @@ import type { LogSessionHostToWebview, LogSessionWebviewToHost } from './logType
 /** All messages the extension host can send to the ProjectWebview. */
 export type ProjectHostToWebview =
 	| ShellHostToWebview
-	| { type: 'project:load'; project: any; viewState: ViewState; prefs: Record<string, unknown>; services: Record<string, any>; icons?: Record<string, string>; isConnected: boolean; isSubscribed?: boolean; statuses?: Record<string, TaskStatus>; serverHost?: string; oauthReturnUrl?: string; isReadonly?: boolean; envKeys?: string[] }
+	| { type: 'project:load'; project: any; viewState: ViewState; prefs: Record<string, unknown>; services: Record<string, any>; icons?: Record<string, string>; isConnected: boolean; isSubscribed?: boolean; statuses?: Record<string, TaskStatus>; serverHost?: string; oauthReturnUrl?: string; isReadonly?: boolean; envKeys?: string[]; defaultDir?: string }
 	| { type: 'project:oauthTokens'; tokens: string; state: string }
 	| { type: 'project:update'; project: any }
 	| { type: 'project:services'; services: Record<string, any>; icons?: Record<string, string> }
@@ -35,6 +35,8 @@ export type ProjectHostToWebview =
 	| { type: 'project:initialState'; state: ViewState }
 	| { type: 'project:initialPrefs'; prefs: Record<string, unknown> }
 	| { type: 'project:envKeysUpdate'; envKeys: string[] }
+	// Workspace-VFS reply for the in-app Save dialog (list/mkdir round-trips).
+	| { type: 'vfs:response'; requestId: number; entries?: { name: string; type: 'file' | 'dir' }[]; error?: string }
 	// Subscription gate + embedded checkout flow (the Subscribe overlay).
 	| { type: 'checkout:required' }
 	| { type: 'checkout:subscriptionUpdate'; isSubscribed: boolean }
@@ -53,6 +55,13 @@ export type ProjectWebviewToHost =
 	| { type: 'project:validate'; requestId: number; pipeline: any }
 	| { type: 'project:getNodeSchema'; requestId: number; provider: string }
 	| { type: 'project:requestSave' }
+	// Save-as for NEW (untitled) documents: the webview's in-app SaveFileDialog
+	// picked a workspace-relative path; the host writes the file and swaps
+	// editors. Untitled documents never route through document.save() — that
+	// is exactly the native OS dialog this flow replaces.
+	| { type: 'project:saveAs'; path: string }
+	// Workspace-VFS request from the in-app Save dialog (list/mkdir only).
+	| { type: 'vfs:request'; requestId: number; op: 'list' | 'mkdir'; path: string }
 	| { type: 'project:viewStateChange'; viewState: ViewState }
 	| { type: 'project:prefsChange'; prefs: Record<string, unknown> }
 	| { type: 'project:openLink'; url: string; displayName?: string; browser?: boolean }

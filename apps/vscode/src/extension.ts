@@ -494,24 +494,14 @@ function registerUtilityCommands(context: vscode.ExtensionContext): void {
 				vscode.window.showErrorMessage('No workspace folder open');
 				return;
 			}
-			const workspaceFolder = vscode.workspace.workspaceFolders[0];
-			const config = ConfigManager.getInstance().getConfig();
-			const rawPath = config?.defaultPipelinePath || 'pipelines';
-			const relativePath = rawPath.replace(/^\$\{workspaceFolder\}[/\\]?/, '');
-			const defaultDir = vscode.Uri.joinPath(workspaceFolder.uri, relativePath);
-
-			const fileUri = await vscode.window.showSaveDialog({
-				defaultUri: vscode.Uri.joinPath(defaultDir, 'new-pipeline'),
-				filters: { 'RocketRide Pipeline': ['pipe'] },
-				title: 'Create New Pipeline',
-			});
-			if (!fileUri) return;
-
-			await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(fileUri, '..'));
-			const template = { components: [] };
+			// Untitled-first (same flow as the browser host): the editor opens
+			// immediately on an untitled document seeded with the pipeline
+			// template; the IN-APP SaveFileDialog takes over on first save
+			// (project:saveAs) — the native OS save dialog is never shown.
 			try {
-				await vscode.workspace.fs.writeFile(fileUri, Buffer.from(JSON.stringify(template, null, 2), 'utf8'));
-				await vscode.commands.executeCommand('vscode.openWith', fileUri, 'rocketride.PageProject');
+				const template = { components: [] };
+				const doc = await vscode.workspace.openTextDocument({ language: 'json', content: JSON.stringify(template, null, 2) });
+				await vscode.commands.executeCommand('vscode.openWith', doc.uri, 'rocketride.PageProject');
 			} catch (error) {
 				vscode.window.showErrorMessage(`Failed to create pipeline: ${error}`);
 			}
