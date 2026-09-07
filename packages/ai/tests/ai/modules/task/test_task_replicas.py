@@ -645,6 +645,35 @@ async def test_an_unreplicated_token_hands_back_the_raw_engine_id():
     assert engines[0].pipes == {1: [b'x']}
 
 
+def test_status_paths_resolve_to_the_primary_and_the_data_path_round_robins():
+    """
+    Status / attach / debug / monitor must keep resolving to the primary: a
+    round-robined answer would report a different process on each call.
+    Only the data path spreads across replicas.
+    """
+    control, engines = _control_with([TASK_STATE.RUNNING.value, TASK_STATE.RUNNING.value])
+    conn = _data_conn(control)
+
+    assert conn.get_task({}, 'task.monitor') is engines[0]
+    assert conn.get_task({}, 'task.monitor') is engines[0]
+    assert conn.get_data_route({'arguments': {}})[0] is engines[0]
+    assert conn.get_data_route({'arguments': {}})[0] is engines[1]
+
+
+def test_a_boolean_pipe_id_is_not_decoded_as_a_wire_id():
+    """Bool is an int subclass; JSON `true` must round-robin, not route to replica 1."""
+    control, engines = _control_with([TASK_STATE.RUNNING.value, TASK_STATE.RUNNING.value])
+
+    task, outbound = control.route_data_request({'arguments': {'subcommand': 'tool', 'pipe_id': True}})
+
+    assert task is engines[0]
+    assert outbound['arguments']['pipe_id'] is True
+    task0 = Task.__new__(Task)
+    task0.replica_index = 1
+    task0.replica_count = 2
+    assert Task.encode_pipe_id(task0, True) is True
+
+
 def test_the_wire_id_encodes_the_replica_that_minted_it():
     """Round-trip: what the client holds decodes back to (engine, local id)."""
     from ai.modules.task.types import decode_pipe_id, encode_pipe_id
@@ -1136,6 +1165,37 @@ async def test_partial_restart_failure_stops_the_whole_group_and_raises():
     assert all(task.stop_calls for task in engines)
     # And the half-restarted control never stays in the registry.
     assert 'tk_test' not in ts._task_control
+
+
+@pytest.mark.asyncio
+async def test_restart_preserves_replica_identity_and_thread_pinning():
+    """
+    A restart resets the RUN, not the engine's identity.
+
+    replica_index decides pipe-id qualification and run-log ownership, and
+    torch_threads is the box-sharing contract — silently losing either on a
+    restart would leave the token routing to the wrong engine and every
+    replica spawning cpu_count threads again.
+    """
+    from rocketride import TASK_STATUS
+
+    task = Task.__new__(Task)
+    task.replica_index = 2
+    task.replica_count = 4
+    task._torch_threads = 8
+    task._status = TASK_STATUS(completedCount=17, state=TASK_STATE.RUNNING.value)
+    task._status_trace = ['noise']
+    task.info = {'a': 1}
+
+    Task._reset_status(task)
+
+    # The run's counters are cleared...
+    assert task._status.completedCount == 0
+    assert task._status_trace == []
+    # ...and the engine's identity survives.
+    assert task.replica_index == 2
+    assert task.replica_count == 4
+    assert task._torch_threads == 8
 
 
 # ---------------------------------------------------------------------------

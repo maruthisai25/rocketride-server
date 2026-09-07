@@ -68,6 +68,7 @@ Central orchestration server managing:
 import os
 import time
 import errno
+import logging
 import socket
 import sys
 import asyncio
@@ -100,6 +101,8 @@ from .commands.cmd_monitor import owner_key
 
 from rocketlib import debug
 
+_log = logging.getLogger(__name__)
+
 
 def _is_task_running(task: Task) -> bool:
     """True when an engine is in the RUNNING state and can take work."""
@@ -113,6 +116,7 @@ def resolve_replicas(requested: Any) -> int:
     try:
         value = int(requested)
     except (TypeError, ValueError):
+        _log.warning('Ignoring invalid replicas=%r; using 1', requested)
         value = 1
     return max(1, min(value, CONST_MAX_REPLICAS))
 
@@ -130,6 +134,7 @@ def resolve_torch_threads(requested: Any, replicas: int) -> int:
     try:
         value = int(raw)
     except (TypeError, ValueError):
+        _log.warning('Ignoring invalid torchThreads=%r; using the automatic default', raw)
         value = 0
 
     if value > 0:
@@ -285,8 +290,9 @@ class TASK_CONTROL:
         args = request.get('arguments') or {}
         wire_id = args.get('pipe_id', None)
 
-        # Nothing to be affine to — spread the load.
-        if not isinstance(wire_id, int):
+        # Nothing to be affine to — spread the load. bool is an int subclass,
+        # so JSON `true` must not decode as wire id 1.
+        if not isinstance(wire_id, int) or isinstance(wire_id, bool):
             return self.pick_data_task(), request
 
         local_id, index = decode_pipe_id(wire_id)

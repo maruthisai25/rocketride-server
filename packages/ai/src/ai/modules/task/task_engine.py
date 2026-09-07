@@ -1567,7 +1567,8 @@ class Task(DAPBase):
         Returns:
             The id to put on the wire.
         """
-        if self.replica_count <= 1 or not isinstance(local_id, int):
+        # bool is an int subclass; never qualify True/False.
+        if self.replica_count <= 1 or not isinstance(local_id, int) or isinstance(local_id, bool):
             return local_id
         return encode_pipe_id(local_id, self.replica_index)
 
