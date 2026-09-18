@@ -65,7 +65,7 @@ def positive_int(value: str) -> int:
     try:
         number = int(value)
     except ValueError:
-        number = 0
+        raise argparse.ArgumentTypeError(f'must be a positive integer, got {value!r}') from None
     if number < 1:
         raise argparse.ArgumentTypeError(f'must be a positive integer, got {value!r}')
     return number

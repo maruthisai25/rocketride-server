@@ -45,7 +45,7 @@ def make_files(tmp_path, count):
     return paths
 
 
-def fake_pipes(client, fail_open=None, fail_write=None):
+def fake_pipes(client, fail_open=None, fail_write=None, write_delay=0):
     """Point client.pipe at fakes and return the stats they record."""
     stats = {'opened': 0, 'active': 0, 'peak': 0, 'closed': []}
 
@@ -71,7 +71,7 @@ def fake_pipes(client, fail_open=None, fail_write=None):
 
         async def write(self, buffer):
             # Yield, so overlapping uploads are observable
-            await asyncio.sleep(0)
+            await asyncio.sleep(write_delay)
             if self.name == fail_write:
                 raise RuntimeError('write rejected')
 
@@ -98,6 +98,7 @@ def client():
     return RocketRideClient(uri='http://localhost:5565', auth='test-key', env={})
 
 
+@pytest.mark.asyncio
 async def test_honors_max_concurrent(client, tmp_path):
     """No more than max_concurrent pipes are open at once, and every file uploads."""
     stats = fake_pipes(client)
@@ -110,6 +111,20 @@ async def test_honors_max_concurrent(client, tmp_path):
     assert [r['action'] for r in results] == ['complete'] * 8
 
 
+@pytest.mark.asyncio
+async def test_limit_of_one_serializes_the_batch(client, tmp_path):
+    """A limit of 1 leaves a single pipe open at a time, in input order."""
+    stats = fake_pipes(client)
+    files = make_files(tmp_path, 5)
+
+    results = await client.send_files(files, 'task-token', 1)
+
+    assert stats['peak'] == 1
+    assert stats['closed'] == [os.path.basename(path) for path in files]
+    assert [r['filepath'] for r in results] == files
+
+
+@pytest.mark.asyncio
 async def test_default_limit(client, tmp_path):
     """Callers that pass no limit get the documented default of 5."""
     stats = fake_pipes(client)
@@ -119,6 +134,7 @@ async def test_default_limit(client, tmp_path):
     assert stats['peak'] == 5
 
 
+@pytest.mark.asyncio
 async def test_failed_file_does_not_stop_batch(client, tmp_path):
     """One bad file fails on its own and results stay in input order."""
     stats = fake_pipes(client, fail_open='file-1.txt')
@@ -132,6 +148,7 @@ async def test_failed_file_does_not_stop_batch(client, tmp_path):
     assert 'pipe rejected' in results[1]['error']
 
 
+@pytest.mark.asyncio
 async def test_failed_write_does_not_finalize_its_pipe(client, tmp_path):
     """A file that fails mid-transfer is left for the server to reap, not closed.
 
@@ -148,6 +165,7 @@ async def test_failed_write_does_not_finalize_its_pipe(client, tmp_path):
     assert [r['action'] for r in results] == ['complete', 'error', 'complete', 'complete']
 
 
+@pytest.mark.asyncio
 async def test_file_lost_mid_batch_still_gets_a_result(client, tmp_path, monkeypatch):
     """A file that goes away after the batch starts reports an error, not a None hole."""
     fake_pipes(client)
@@ -168,6 +186,22 @@ async def test_file_lost_mid_batch_still_gets_a_result(client, tmp_path, monkeyp
     assert 'vanished' in results[1]['error']
 
 
+@pytest.mark.asyncio
+async def test_cancellation_propagates(client, tmp_path):
+    """Cancelling the caller cancels the batch: nothing queued starts, nothing in flight is finalized."""
+    stats = fake_pipes(client, write_delay=10)
+    task = asyncio.create_task(client.send_files(make_files(tmp_path, 6), 'task-token', 2))
+    await asyncio.sleep(0.05)  # let the first two slots fill
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert stats['opened'] == 2
+    assert stats['closed'] == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('max_concurrent', [0, -1, 2.5, True, 'five'])
 async def test_rejects_invalid_max_concurrent(client, tmp_path, max_concurrent):
     """A bad limit raises before anything is uploaded."""
