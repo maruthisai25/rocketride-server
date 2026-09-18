@@ -539,13 +539,15 @@ class DataMixin(DAPClient):
         ],
         token: str,
         max_concurrent: int = 5,
-    ) -> UPLOAD_RESULT:
+    ) -> List[UPLOAD_RESULT]:
         """
         Upload multiple files to a pipeline with progress tracking.
 
-        Uploads run concurrently with automatic progress events, but never more than
-        max_concurrent files at a time. Results keep the order of the files argument,
-        and a failure on one file does not stop the rest of the batch.
+        Uploads run concurrently with automatic progress events, with at most
+        max_concurrent transfers in flight at once; a pipe left open by a failed
+        write frees its slot immediately and is reclaimed by the server's reaper.
+        Results keep the order of the files argument, and a failure on one file
+        does not stop the rest of the batch.
 
         Each file can be specified as:
         - Just a file path: "/path/to/file.pdf"
@@ -559,12 +561,11 @@ class DataMixin(DAPClient):
                 Must be a positive integer (default: 5)
 
         Returns:
-            List[Dict]: Upload results for each file with status, timing, and processing results
+            List[UPLOAD_RESULT]: One result per file, in the order of ``files``
 
         Raises:
-            ValueError: If files list is empty, file paths invalid, token missing,
-                or max_concurrent is not a positive integer
-            FileNotFoundError: If any specified file doesn't exist
+            ValueError: If files list is empty, a file path is invalid or missing,
+                token missing, or max_concurrent is not a positive integer
             RuntimeError: If API key is not configured
 
         Example:
@@ -780,9 +781,8 @@ class DataMixin(DAPClient):
             else:
                 self.debug_message(f'Upload completed: {filepath} ({bytes_sent} bytes, {upload_time:.2f}s)')
 
-        self.debug_message(
-            f'Starting upload of {len(normalized_files)} files (max_concurrent={max_concurrent}, token={token})'
-        )
+        # The token is a credential, so it stays out of the log line
+        self.debug_message(f'Starting upload of {len(normalized_files)} files (max_concurrent={max_concurrent})')
 
         semaphore = asyncio.Semaphore(max_concurrent)
 
@@ -805,7 +805,7 @@ class DataMixin(DAPClient):
         total_bytes = sum(r.get('bytes_sent', 0) for r in results if r and r.get('action') == 'complete')
 
         self.debug_message(
-            f'Upload completed: {successful_uploads} successful, {failed_uploads} failed, {total_bytes} total bytes transferred (token={token})'
+            f'Upload completed: {successful_uploads} successful, {failed_uploads} failed, {total_bytes} total bytes transferred'
         )
 
         return results
