@@ -443,7 +443,7 @@ Send data directly to a pipeline. `data` is str or bytes; `objinfo` is optional 
 
 ### `async send_files(files: List, token: str, max_concurrent: int = 5) -> List[UPLOAD_RESULT]`
 
-Upload multiple files in parallel, with at most `max_concurrent` transfers in flight at once (default 5); a pipe left open by a failed write frees its slot immediately and is reclaimed by the server's reaper. Each entry can be a file path `'report.pdf'`, a tuple `(filepath, objinfo)`, or `(filepath, objinfo, mimetype)`. MIME types are auto-detected from the extension when not given; `objinfo` defaults to `{'name': <basename>}`. Raise `max_concurrent` for many small files, lower it for large ones.
+Upload multiple files in parallel, with at most `max_concurrent` transfers in flight at once (default 5); a pipe left open by a failed write frees its client-side slot at once and is reclaimed by the server's reaper. Each entry can be a file path `'report.pdf'`, a tuple `(filepath, objinfo)`, or `(filepath, objinfo, mimetype)`. MIME types are auto-detected from the extension when not given; `objinfo` defaults to `{'name': <basename>}`. Raise `max_concurrent` for many small files, lower it for large ones.
 
 Returns a list of upload result dictionaries (one per file, in input order) — see [Upload Result](#upload-result). Raises `ValueError` (empty list, missing file, bad entry shape, missing token, `max_concurrent` not a positive integer) or `RuntimeError` (no API key configured). Per-file failures do NOT raise — they come back as result entries with `action: 'error'`.
 

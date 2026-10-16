@@ -29,7 +29,7 @@ the transfer.
 ## Files: `send_files()`
 
 Uploads a list of files with at most `max_concurrent` transfers in flight at once
-(default 5) — a pipe left open by a failed write frees its slot immediately and is
+(default 5) — a pipe left open by a failed write frees its client-side slot at once and is
 reclaimed by the server's reaper — and returns one `UPLOAD_RESULT` per file in the
 order they were given. Each entry is a path `str`, a `(path, objinfo)` tuple, or a
 `(path, objinfo, mimetype)` tuple:

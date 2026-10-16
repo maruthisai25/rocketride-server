@@ -545,7 +545,7 @@ class DataMixin(DAPClient):
 
         Uploads run concurrently with automatic progress events, with at most
         max_concurrent transfers in flight at once; a pipe left open by a failed
-        write frees its slot immediately and is reclaimed by the server's reaper.
+        write frees its client-side slot at once and is reclaimed by the server's reaper.
         Results keep the order of the files argument, and a failure on one file
         does not stop the rest of the batch.
 
@@ -797,7 +797,22 @@ class DataMixin(DAPClient):
         ]
 
         # Wait for all uploads to complete
-        await asyncio.gather(*upload_tasks, return_exceptions=True)
+        outcomes = await asyncio.gather(*upload_tasks, return_exceptions=True)
+
+        # upload_file catches Exception, so a slot is only still empty when a
+        # BaseException (a CancelledError raised inside that one task) skipped
+        # it. Fill it so callers get one result per file, as documented.
+        for index, outcome in enumerate(outcomes):
+            if results[index] is None:
+                results[index] = {
+                    'action': 'error',
+                    'filepath': normalized_files[index][0],
+                    'bytes_sent': 0,
+                    'file_size': 0,
+                    'upload_time': 0.0,
+                    'result': None,
+                    'error': str(outcome) or type(outcome).__name__,
+                }
 
         # Log summary
         successful_uploads = sum(1 for r in results if r and r.get('action') == 'complete')

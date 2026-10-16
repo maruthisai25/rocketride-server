@@ -189,7 +189,7 @@ async def test_file_lost_mid_batch_still_gets_a_result(client, tmp_path, monkeyp
 @pytest.mark.asyncio
 async def test_cancellation_propagates(client, tmp_path):
     """Cancelling the caller cancels the batch: nothing queued starts, nothing in flight is finalized."""
-    stats = fake_pipes(client, write_delay=10)
+    stats = fake_pipes(client, write_delay=0.2)
     task = asyncio.create_task(client.send_files(make_files(tmp_path, 6), 'task-token', 2))
     await asyncio.sleep(0.05)  # let the first two slots fill
 
@@ -197,8 +197,38 @@ async def test_cancellation_propagates(client, tmp_path):
 
     with pytest.raises(asyncio.CancelledError):
         await task
+    # Outlive the pending writes: if the per-file tasks were still alive they
+    # would finish, close their pipes and start the next two files here.
+    await asyncio.sleep(0.5)
     assert stats['opened'] == 2
     assert stats['closed'] == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_file_task_still_yields_a_result(client, tmp_path):
+    """A CancelledError inside one file's task leaves no hole: that file reports an error."""
+    stats = fake_pipes(client)
+    files = make_files(tmp_path, 3)
+
+    real_pipe = client.pipe
+
+    async def pipe(token, objinfo=None, mime_type=None, provider=None, on_sse=None):
+        fake = await real_pipe(token, objinfo, mime_type, provider, on_sse)
+        if fake.name == os.path.basename(files[1]):
+
+            async def write(buffer):
+                raise asyncio.CancelledError()
+
+            fake.write = write
+        return fake
+
+    client.pipe = pipe
+
+    results = await client.send_files(files, 'task-token', 2)
+
+    assert [r['action'] for r in results] == ['complete', 'error', 'complete']
+    assert results[1]['filepath'] == files[1]
+    assert stats['opened'] == 3
 
 
 @pytest.mark.asyncio

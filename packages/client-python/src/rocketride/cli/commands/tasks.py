@@ -209,9 +209,7 @@ async def run_upload(args) -> int:
                     out.line(f'warning: failed to terminate upload pipeline: {error}')
         elapsed_seconds = time.time() - start_time
 
-        # step: summarize — send_files leaves a hole if a file never produced a
-        # result, so drop anything that is not a result dict before reading it
-        results = [r for r in results if isinstance(r, dict)]
+        # step: summarize
         succeeded = [r for r in results if r.get('action') == 'complete']
         failed = [r for r in results if r.get('action') != 'complete']
         total_bytes = sum(int(r.get('file_size', 0) or 0) for r in succeeded)
